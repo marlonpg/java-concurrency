@@ -984,81 +984,727 @@ public class PerformanceMonitoring {
 
 ## 10. Advanced Topics for Deep Understanding
 
-### Lock-Free Programming
+
+```
+
+### VarHandle API (Java 9)
+**What it is**: A more flexible and safer alternative to `sun.misc.Unsafe` for low-level operations.
+
+**Key Features**:
+- **Type safety**: Compile-time type checking
+- **Memory ordering**: Fine-grained control over memory semantics
+- **Performance**: Optimized by JVM
+- **Portability**: Works across different platforms
 
 ```java
+public class VarHandleExample {
+    private static final VarHandle COUNTER;
+    private volatile int counter;
+    
+    static {
+        try {
+            COUNTER = MethodHandles.lookup()
+                .findVarHandle(VarHandleExample.class, "counter", int.class);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+    
+    public boolean compareAndSet(int expected, int update) {
+        return COUNTER.compareAndSet(this, expected, update);
+    }
+    
+    public int getAndIncrement() {
+        return (int) COUNTER.getAndAdd(this, 1);
+    }
+    
+    public void setOpaque(int value) {
+        COUNTER.setOpaque(this, value); // Opaque access mode
+    }
+    
+    public int getAcquire() {
+        return (int) COUNTER.getAcquire(this); // Acquire access mode
+    }
+}
+```
+
+### Virtual Threads (Java 19 Preview, Java 21 LTS)
+**What they are**: Lightweight threads managed by the JVM, not the OS. They enable massive concurrency with minimal resource overhead.
+
+**Key Benefits**:
+- **Lightweight**: Millions of virtual threads vs thousands of platform threads
+- **Cheap creation**: No significant overhead to create/destroy
+- **Blocking-friendly**: Can block without tying up OS threads
+- **Familiar API**: Same Thread API, just different implementation
+
+**How they work**:
+- **Carrier threads**: OS threads that execute virtual threads
+- **Mounting/Unmounting**: Virtual threads mount on carrier threads when running
+- **Continuation**: When virtual thread blocks, it unmounts and carrier thread can run other virtual threads
+
+```java
+public class VirtualThreadExample {
+    
+    // Java 19+ Preview API
+    public void createVirtualThreads() throws InterruptedException {
+        // Method 1: Thread.ofVirtual() (Java 19+)
+        Thread vt1 = Thread.ofVirtual().start(() -> {
+            System.out.println("Virtual thread: " + Thread.currentThread());
+        });
+        vt1.join();
+        
+        // Method 2: Thread.startVirtualThread() (Java 19+)
+        Thread vt2 = Thread.startVirtualThread(() -> {
+            System.out.println("Another virtual thread");
+        });
+        vt2.join();
+        
+        // Method 3: Executors.newVirtualThreadPerTaskExecutor() (Java 19+)
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<String>> futures = new ArrayList<>();
+            
+            // Can easily handle millions of virtual threads
+            for (int i = 0; i < 1_000_000; i++) {
+                final int taskId = i;
+                Future<String> future = executor.submit(() -> {
+                    // Simulate I/O operation
+                    try {
+                        Thread.sleep(Duration.ofSeconds(1));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return "Interrupted";
+                    }
+                    return "Task " + taskId + " completed";
+                });
+                futures.add(future);
+            }
+            
+            // Process results
+            for (Future<String> future : futures) {
+                try {
+                    String result = future.get();
+                    // Process result
+                } catch (ExecutionException e) {
+                    System.err.println("Task failed: " + e.getCause());
+                }
+            }
+        }
+    }
+}
+```
+
+### Structured Concurrency (Java 19 Incubator, Java 21 Preview)
+**What it is**: A programming model that treats multiple related tasks as a single unit of work.
+
+**Key Benefits**:
+- **Automatic cleanup**: If parent fails, all children are cancelled
+- **Error propagation**: Exceptions bubble up properly
+- **Resource management**: Prevents thread leaks
+- **Observability**: Better debugging and monitoring
+
+```java
+// Java 21+ Preview API
+public class StructuredConcurrencyExample {
+    public String handleRequest(String requestId) throws InterruptedException, ExecutionException {
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+            // Fork multiple related tasks
+            Supplier<String> task1 = scope.fork(() -> processStep1(requestId));
+            Supplier<String> task2 = scope.fork(() -> processStep2(requestId));
+            Supplier<String> task3 = scope.fork(() -> processStep3(requestId));
+            
+            scope.join();           // Wait for all to complete
+            scope.throwIfFailed();  // Propagate any failures
+            
+            // All tasks succeeded
+            return combineResults(
+                task1.get(),
+                task2.get(), 
+                task3.get()
+            );
+        } // Automatic cleanup of any remaining tasks
+    }
+    
+    private String processStep1(String requestId) {
+        try { Thread.sleep(100); } catch (InterruptedException e) {}
+        return "Step1-" + requestId;
+    }
+    
+    private String processStep2(String requestId) {
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+        return "Step2-" + requestId;
+    }
+    
+    private String processStep3(String requestId) {
+        try { Thread.sleep(200); } catch (InterruptedException e) {}
+        return "Step3-" + requestId;
+    }
+    
+    private String combineResults(String s1, String s2, String s3) {
+        return String.format("Combined: %s, %s, %s", s1, s2, s3);
+    }
+}
+```
+
+### Scoped Values (Java 20 Incubator, Java 22 Preview)
+**What it is**: A better alternative to ThreadLocal for sharing immutable data across method calls.
+
+**Advantages over ThreadLocal**:
+- **Immutable**: Values cannot be changed once set
+- **Scoped**: Automatically cleaned up when scope ends
+- **Inheritance**: Child threads inherit parent's scoped values
+- **Performance**: Better memory usage and performance
+
+```java
+// Java 22+ Preview API
+public class ScopedValueExample {
+    private static final ScopedValue<String> USER_ID = ScopedValue.newInstance();
+    private static final ScopedValue<String> REQUEST_ID = ScopedValue.newInstance();
+    
+    public void handleRequest(String userId, String requestId) {
+        ScopedValue.where(USER_ID, userId)
+                  .where(REQUEST_ID, requestId)
+                  .run(() -> {
+                      processRequest();
+                      // USER_ID and REQUEST_ID are available in all called methods
+                  });
+        // Values automatically cleaned up here
+    }
+    
+    private void processRequest() {
+        String currentUser = USER_ID.get(); // Available without passing parameters
+        String currentRequest = REQUEST_ID.get();
+        
+        // Call other methods that can also access these values
+        validateUser();
+        logRequest();
+    }
+    
+    private void validateUser() {
+        String userId = USER_ID.get(); // Still available
+        // Validation logic
+    }
+    
+    private void logRequest() {
+        String userId = USER_ID.get();
+        String requestId = REQUEST_ID.get();
+        System.out.println("Processing request " + requestId + " for user " + userId);
+    }
+}
+```
+
+### Lock-Free Programming (Available since Java 5 with Atomic classes)
+**What it is**: Programming without using locks, relying on atomic operations and compare-and-swap (CAS).
+
+**Key Concepts**:
+- **Compare-and-Swap (CAS)**: Atomic operation that updates a value only if it matches expected value
+- **ABA Problem**: Value changes from A to B and back to A, CAS thinks nothing changed
+- **Memory ordering**: Ensuring operations happen in correct order
+
+**Real Implementation using AtomicReference (Java 5+)**:
+```java
 public class LockFreeStack<T> {
-    private volatile Node<T> head;
+    private final AtomicReference<Node<T>> head = new AtomicReference<>();
     
     private static class Node<T> {
         final T data;
-        volatile Node<T> next;
+        final Node<T> next;
         
-        Node(T data) { this.data = data; }
+        Node(T data, Node<T> next) {
+            this.data = data;
+            this.next = next;
+        }
     }
     
     public void push(T item) {
-        Node<T> newNode = new Node<>(item);
         Node<T> currentHead;
+        Node<T> newNode;
         do {
-            currentHead = head;
-            newNode.next = currentHead;
-        } while (!compareAndSetHead(currentHead, newNode));
+            currentHead = head.get();
+            newNode = new Node<>(item, currentHead);
+        } while (!head.compareAndSet(currentHead, newNode));
     }
     
     public T pop() {
         Node<T> currentHead;
         Node<T> newHead;
         do {
-            currentHead = head;
+            currentHead = head.get();
             if (currentHead == null) return null;
             newHead = currentHead.next;
-        } while (!compareAndSetHead(currentHead, newHead));
+        } while (!head.compareAndSet(currentHead, newHead));
         
         return currentHead.data;
     }
-    
-    private boolean compareAndSetHead(Node<T> expected, Node<T> update) {
-        // Atomic compare-and-swap operation
-        // In real implementation, would use Unsafe or VarHandle
-        return true; // Simplified
-    }
 }
 ```
+```
 
-### Virtual Threads (Project Loom - Java 19+)
+---
+
+## 11. Missing Concepts Explained
+
+### Phaser (Java 7)
+**What it is**: A more flexible synchronization barrier that supports multiple phases and dynamic thread registration.
+
+**Key Features**:
+- **Reusable**: Unlike CountDownLatch, can be used for multiple phases
+- **Dynamic**: Threads can register/deregister at runtime
+- **Hierarchical**: Phasers can be organized in trees
 
 ```java
-public class VirtualThreadExample {
-    public void traditionalThreads() throws InterruptedException {
-        List<Thread> threads = new ArrayList<>();
-        for (int i = 0; i < 1000; i++) {
-            Thread t = new Thread(() -> {
-                try { Thread.sleep(1000); } catch (InterruptedException e) {}
-            });
-            threads.add(t);
-            t.start();
+public class PhaserExample {
+    public static void main(String[] args) {
+        Phaser phaser = new Phaser(1); // Register main thread
+        
+        for (int i = 0; i < 3; i++) {
+            phaser.register(); // Register each worker
+            new Thread(new Worker(phaser, i)).start();
         }
         
-        for (Thread t : threads) {
-            t.join();
+        // Main thread participates in synchronization
+        for (int phase = 0; phase < 3; phase++) {
+            System.out.println("Phase " + phase + " starting");
+            phaser.arriveAndAwaitAdvance(); // Wait for all threads
         }
+        
+        phaser.arriveAndDeregister(); // Main thread leaves
     }
     
-    public void virtualThreads() throws InterruptedException {
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            List<Future<?>> futures = new ArrayList<>();
-            for (int i = 0; i < 1_000_000; i++) { // Much higher number!
-                Future<?> future = executor.submit(() -> {
-                    try { Thread.sleep(1000); } catch (InterruptedException e) {}
-                });
-                futures.add(future);
+    static class Worker implements Runnable {
+        private final Phaser phaser;
+        private final int id;
+        
+        Worker(Phaser phaser, int id) {
+            this.phaser = phaser;
+            this.id = id;
+        }
+        
+        @Override
+        public void run() {
+            for (int phase = 0; phase < 3; phase++) {
+                System.out.println("Worker " + id + " working on phase " + phase);
+                try { Thread.sleep(1000); } catch (InterruptedException e) {}
+                phaser.arriveAndAwaitAdvance(); // Complete phase
             }
-            
-            for (Future<?> future : futures) {
-                future.get();
-            }
+            phaser.arriveAndDeregister(); // Worker leaves
         }
     }
 }
 ```
+
+### Fork-Join Framework (Java 7)
+**What it is**: A framework for parallel execution using divide-and-conquer algorithms with work-stealing.
+
+**Key Concepts**:
+- **Work-stealing**: Idle threads steal work from busy threads' queues
+- **RecursiveTask**: For tasks that return a result
+- **RecursiveAction**: For tasks that don't return a result
+- **ForkJoinPool**: Special thread pool optimized for fork-join tasks
+
+**How Work-Stealing Works**:
+1. Each thread has its own deque (double-ended queue)
+2. Threads add tasks to the head of their own deque
+3. Threads take tasks from the head of their own deque (LIFO)
+4. When idle, threads steal from the tail of other threads' deques (FIFO)
+
+**Why it's efficient**: Reduces contention and improves cache locality
+
+### CompletableFuture (Java 8)
+**What it is**: A Future that can be explicitly completed and supports functional-style transformations.
+
+**Key Features**:
+- **Composable**: Chain operations with thenApply, thenCompose, etc.
+- **Combinable**: Combine multiple futures with thenCombine, allOf, anyOf
+- **Exception handling**: Handle exceptions with exceptionally, handle
+- **Async execution**: Run operations in different thread pools
+
+```java
+public class CompletableFutureAdvanced {
+    private final ExecutorService executor = Executors.newFixedThreadPool(4);
+    
+    public CompletableFuture<String> processOrder(String orderId) {
+        return CompletableFuture
+            .supplyAsync(() -> validateOrder(orderId), executor)
+            .thenCompose(this::fetchInventory)
+            .thenCompose(this::calculatePrice)
+            .thenApply(this::formatResult)
+            .exceptionally(throwable -> "Order failed: " + throwable.getMessage())
+            .whenComplete((result, throwable) -> {
+                if (throwable == null) {
+                    System.out.println("Order completed: " + result);
+                } else {
+                    System.err.println("Order failed: " + throwable);
+                }
+            });
+    }
+    
+    private String validateOrder(String orderId) {
+        if (orderId == null) throw new IllegalArgumentException("Invalid order");
+        return orderId;
+    }
+    
+    private CompletableFuture<String> fetchInventory(String orderId) {
+        return CompletableFuture.supplyAsync(() -> orderId + "-inventory", executor);
+    }
+    
+    private CompletableFuture<String> calculatePrice(String inventory) {
+        return CompletableFuture.supplyAsync(() -> inventory + "-$100", executor);
+    }
+    
+    private String formatResult(String priceInfo) {
+        return "Processed: " + priceInfo;
+    }
+}
+```
+
+### StampedLock (Java 8)
+**What it is**: A more flexible synchronization barrier that supports multiple phases and dynamic thread registration.
+
+**Key Features**:
+- **Reusable**: Unlike CountDownLatch, can be used for multiple phases
+- **Dynamic**: Threads can register/deregister at runtime
+- **Hierarchical**: Phasers can be organized in trees
+
+```java
+public class PhaserExample {
+    public static void main(String[] args) {
+        Phaser phaser = new Phaser(1); // Register main thread
+        
+        for (int i = 0; i < 3; i++) {
+            phaser.register(); // Register each worker
+            new Thread(new Worker(phaser, i)).start();
+        }
+        
+        // Main thread participates in synchronization
+        for (int phase = 0; phase < 3; phase++) {
+            System.out.println("Phase " + phase + " starting");
+            phaser.arriveAndAwaitAdvance(); // Wait for all threads
+        }
+        
+        phaser.arriveAndDeregister(); // Main thread leaves
+    }
+    
+    static class Worker implements Runnable {
+        private final Phaser phaser;
+        private final int id;
+        
+        Worker(Phaser phaser, int id) {
+            this.phaser = phaser;
+            this.id = id;
+        }
+        
+        @Override
+        public void run() {
+            for (int phase = 0; phase < 3; phase++) {
+                System.out.println("Worker " + id + " working on phase " + phase);
+                try { Thread.sleep(1000); } catch (InterruptedException e) {}
+                phaser.arriveAndAwaitAdvance(); // Complete phase
+            }
+            phaser.arriveAndDeregister(); // Worker leaves
+        }
+    }
+}
+```
+
+### StampedLock (Java 8)
+**What it is**: A capability-based lock with three modes: writing, reading, and optimistic reading.
+
+**Key Features**:
+- **Optimistic reads**: Non-blocking reads that may need validation
+- **Better performance**: Can outperform ReadWriteLock in read-heavy scenarios
+- **Stamped operations**: Each lock acquisition returns a stamp
+
+```java
+public class StampedLockExample {
+    private final StampedLock lock = new StampedLock();
+    private double x, y;
+    
+    public void write(double newX, double newY) {
+        long stamp = lock.writeLock();
+        try {
+            x = newX;
+            y = newY;
+        } finally {
+            lock.unlockWrite(stamp);
+        }
+    }
+    
+    public double distanceFromOrigin() {
+        long stamp = lock.tryOptimisticRead(); // Optimistic read
+        double curX = x, curY = y; // Read values
+        
+        if (!lock.validate(stamp)) { // Check if values are still valid
+            stamp = lock.readLock(); // Fall back to pessimistic read
+            try {
+                curX = x;
+                curY = y;
+            } finally {
+                lock.unlockRead(stamp);
+            }
+        }
+        return Math.sqrt(curX * curX + curY * curY);
+    }
+}
+```
+
+### Fork-Join Framework (Java 7)
+**What it is**: A framework for parallel execution using divide-and-conquer algorithms with work-stealing.
+
+**Key Concepts**:
+- **Work-stealing**: Idle threads steal work from busy threads' queues
+- **RecursiveTask**: For tasks that return a result
+- **RecursiveAction**: For tasks that don't return a result
+- **ForkJoinPool**: Special thread pool optimized for fork-join tasks
+
+**How Work-Stealing Works**:
+1. Each thread has its own deque (double-ended queue)
+2. Threads add tasks to the head of their own deque
+3. Threads take tasks from the head of their own deque (LIFO)
+4. When idle, threads steal from the tail of other threads' deques (FIFO)
+
+**Why it's efficient**: Reduces contention and improves cache locality
+
+### CompletableFuture (Java 8)
+**What it is**: A Future that can be explicitly completed and supports functional-style transformations.
+
+**Key Features**:
+- **Composable**: Chain operations with thenApply, thenCompose, etc.
+- **Combinable**: Combine multiple futures with thenCombine, allOf, anyOf
+- **Exception handling**: Handle exceptions with exceptionally, handle
+- **Async execution**: Run operations in different thread pools
+
+```java
+public class CompletableFutureAdvanced {
+    private final ExecutorService executor = Executors.newFixedThreadPool(4);
+    
+    public CompletableFuture<String> processOrder(String orderId) {
+        return CompletableFuture
+            .supplyAsync(() -> validateOrder(orderId), executor)
+            .thenCompose(this::fetchInventory)
+            .thenCompose(this::calculatePrice)
+            .thenApply(this::formatResult)
+            .exceptionally(throwable -> "Order failed: " + throwable.getMessage())
+            .whenComplete((result, throwable) -> {
+                if (throwable == null) {
+                    System.out.println("Order completed: " + result);
+                } else {
+                    System.err.println("Order failed: " + throwable);
+                }
+            });
+    }
+    
+    private String validateOrder(String orderId) {
+        if (orderId == null) throw new IllegalArgumentException("Invalid order");
+        return orderId;
+    }
+    
+    private CompletableFuture<String> fetchInventory(String orderId) {
+        return CompletableFuture.supplyAsync(() -> orderId + "-inventory", executor);
+    }
+    
+    private CompletableFuture<String> calculatePrice(String inventory) {
+        return CompletableFuture.supplyAsync(() -> inventory + "-$100", executor);
+    }
+    
+    private String formatResult(String priceInfo) {
+        return "Processed: " + priceInfo;
+    }
+}
+```
+
+### VarHandle API (Java 9)
+**What it is**: A more flexible and safer alternative to `sun.misc.Unsafe` for low-level operations.
+
+**Key Features**:
+- **Type safety**: Compile-time type checking
+- **Memory ordering**: Fine-grained control over memory semantics
+- **Performance**: Optimized by JVM
+- **Portability**: Works across different platforms
+
+```java
+public class VarHandleExample {
+    private static final VarHandle COUNTER;
+    private volatile int counter;
+    
+    static {
+        try {
+            COUNTER = MethodHandles.lookup()
+                .findVarHandle(VarHandleExample.class, "counter", int.class);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+    
+    public boolean compareAndSet(int expected, int update) {
+        return COUNTER.compareAndSet(this, expected, update);
+    }
+    
+    public int getAndIncrement() {
+        return (int) COUNTER.getAndAdd(this, 1);
+    }
+    
+    public void setOpaque(int value) {
+        COUNTER.setOpaque(this, value); // Opaque access mode
+    }
+    
+    public int getAcquire() {
+        return (int) COUNTER.getAcquire(this); // Acquire access mode
+    }
+}
+```
+
+### Structured Concurrency (Java 19+ Incubator, Java 21+ Preview)
+**What it is**: A programming model that treats multiple related tasks as a single unit of work.
+
+**Key Benefits**:
+- **Automatic cleanup**: If parent fails, all children are cancelled
+- **Error propagation**: Exceptions bubble up properly
+- **Resource management**: Prevents thread leaks
+- **Observability**: Better debugging and monitoring
+
+```java
+// Java 21+ Preview API
+public class StructuredConcurrencyExample {
+    public String handleRequest(String requestId) throws InterruptedException, ExecutionException {
+        try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+            // Fork multiple related tasks
+            Supplier<String> task1 = scope.fork(() -> processStep1(requestId));
+            Supplier<String> task2 = scope.fork(() -> processStep2(requestId));
+            Supplier<String> task3 = scope.fork(() -> processStep3(requestId));
+            
+            scope.join();           // Wait for all to complete
+            scope.throwIfFailed();  // Propagate any failures
+            
+            // All tasks succeeded
+            return combineResults(
+                task1.get(),
+                task2.get(), 
+                task3.get()
+            );
+        } // Automatic cleanup of any remaining tasks
+    }
+    
+    private String processStep1(String requestId) {
+        try { Thread.sleep(100); } catch (InterruptedException e) {}
+        return "Step1-" + requestId;
+    }
+    
+    private String processStep2(String requestId) {
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+        return "Step2-" + requestId;
+    }
+    
+    private String processStep3(String requestId) {
+        try { Thread.sleep(200); } catch (InterruptedException e) {}
+        return "Step3-" + requestId;
+    }
+    
+    private String combineResults(String s1, String s2, String s3) {
+        return String.format("Combined: %s, %s, %s", s1, s2, s3);
+    }
+}
+```
+
+### Scoped Values (Java 20+ Incubator, Java 22+ Preview)
+**What it is**: A better alternative to ThreadLocal for sharing immutable data across method calls.
+
+**Advantages over ThreadLocal**:
+- **Immutable**: Values cannot be changed once set
+- **Scoped**: Automatically cleaned up when scope ends
+- **Inheritance**: Child threads inherit parent's scoped values
+- **Performance**: Better memory usage and performance
+
+```java
+// Java 22+ Preview API
+public class ScopedValueExample {
+    private static final ScopedValue<String> USER_ID = ScopedValue.newInstance();
+    private static final ScopedValue<String> REQUEST_ID = ScopedValue.newInstance();
+    
+    public void handleRequest(String userId, String requestId) {
+        ScopedValue.where(USER_ID, userId)
+                  .where(REQUEST_ID, requestId)
+                  .run(() -> {
+                      processRequest();
+                      // USER_ID and REQUEST_ID are available in all called methods
+                  });
+        // Values automatically cleaned up here
+    }
+    
+    private void processRequest() {
+        String currentUser = USER_ID.get(); // Available without passing parameters
+        String currentRequest = REQUEST_ID.get();
+        
+        // Call other methods that can also access these values
+        validateUser();
+        logRequest();
+    }
+    
+    private void validateUser() {
+        String userId = USER_ID.get(); // Still available
+        // Validation logic
+    }
+    
+    private void logRequest() {
+        String userId = USER_ID.get();
+        String requestId = REQUEST_ID.get();
+        System.out.println("Processing request " + requestId + " for user " + userId);
+    }
+}
+```
+
+### Lock-Free Programming (Available since Java 5 with Atomic classes)
+**What it is**: Programming without using locks, relying on atomic operations and compare-and-swap (CAS).
+
+**Key Concepts**:
+- **Compare-and-Swap (CAS)**: Atomic operation that updates a value only if it matches expected value
+- **ABA Problem**: Value changes from A to B and back to A, CAS thinks nothing changed
+- **Memory ordering**: Ensuring operations happen in correct order
+
+**Real Implementation using AtomicReference (Java 5+)**:
+```java
+public class LockFreeStack<T> {
+    private final AtomicReference<Node<T>> head = new AtomicReference<>();
+    
+    private static class Node<T> {
+        final T data;
+        final Node<T> next;
+        
+        Node(T data, Node<T> next) {
+            this.data = data;
+            this.next = next;
+        }
+    }
+    
+    public void push(T item) {
+        Node<T> currentHead;
+        Node<T> newNode;
+        do {
+            currentHead = head.get();
+            newNode = new Node<>(item, currentHead);
+        } while (!head.compareAndSet(currentHead, newNode));
+    }
+    
+    public T pop() {
+        Node<T> currentHead;
+        Node<T> newHead;
+        do {
+            currentHead = head.get();
+            if (currentHead == null) return null;
+            newHead = currentHead.next;
+        } while (!head.compareAndSet(currentHead, newHead));
+        
+        return currentHead.data;
+    }
+}
+```
+---
+
+## References
+- [Oracle Java Concurrency Tutorial](https://docs.oracle.com/javase/tutorial/essential/concurrency/)
+- [java.util.concurrent Package](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/package-summary.html)
+- [Java Memory Model Specification](https://docs.oracle.com/javase/specs/jls/se21/html/jls-17.html)
+- [JEP 444: Virtual Threads](https://openjdk.org/jeps/444)
+- [JEP 453: Structured Concurrency](https://openjdk.org/jeps/453)
+- [JEP 193: Variable Handles](https://openjdk.org/jeps/193)
+- [JEP 429: Scoped Values](https://openjdk.org/jeps/429)
+- [Doug Lea's Papers](http://gee.cs.oswego.edu/dl/papers/)
