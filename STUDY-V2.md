@@ -1,16 +1,12 @@
-This is the complete 5-minute "Java Concurrency Deep Dive" lightning talk outline in explicit Markdown code format, including the requested code examples.
+# Java Concurrency Deep Dive
 
-```markdown
-```
-# Java Concurrency Deep Dive (5-Minute Lightning Talk Outline)
-
-## **Slide 1: Introduction: Why Concurrency Matters** (Approx. 30 seconds)
+## **Introduction: Why Concurrency Matters**
 
 1.  **Definition:** Concurrency allows multiple threads (the smallest unit of execution) to run simultaneously, significantly **improving the performance and responsiveness** of applications.
 2.  **The Challenge:** Managing concurrent access to shared resources is complex. Without careful synchronization, you risk **data inconsistencies, race conditions, and deadlocks**.
-3.  **The Goal:** We must master the **fundamentals**—the building blocks—to write efficient, scalable, and thread-safe programs.
+3.  **The Goal:** We must understand deeply how things works to write efficient, scalable, and thread-safe programs.
 
-## **Slide 2: Synchronization & The Race for Shared State** (Approx. 60 seconds)
+## **Synchronization & The Race for Shared State** (Approx. 60 seconds)
 
 1.  **The Problem (Race Conditions):** A race condition occurs when two or more threads try to **access and change shared data simultaneously**, leading to unexpected outcomes. Example: `counter++` is not atomic; it decomposes into 3 steps (read, increment, store), allowing threads to interfere.
 
