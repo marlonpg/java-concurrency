@@ -33,13 +33,13 @@ public class ConcurrencyExamplesRunner {
         System.out.println("Final value: " + varExample.get());
         System.out.println();
         
-        // Demonstrates structured concurrency for coordinated task execution
-        System.out.println("3. Structured Concurrency Example:");
-        StructuredConcurrencyExample scExample = new StructuredConcurrencyExample();
-        String scResult = scExample.handleRequest("REQ-456"); // Parallel task execution
-        System.out.println("Structured result: " + scResult);
-        System.out.println();
-        
+//        // Demonstrates structured concurrency for coordinated task execution
+//        System.out.println("3. Structured Concurrency Example:");
+//        StructuredConcurrencyExample scExample = new StructuredConcurrencyExample();
+//        String scResult = scExample.handleRequest("REQ-456"); // Parallel task execution
+//        System.out.println("Structured result: " + scResult);
+//        System.out.println();
+//
         // Shows thread-local context passing without explicit parameters
         System.out.println("4. Scoped Values Example:");
         ScopedValueExample svExample = new ScopedValueExample();
